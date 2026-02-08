@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.animeextension.fr.animesama
 
+import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import app.cash.quickjs.QuickJs
