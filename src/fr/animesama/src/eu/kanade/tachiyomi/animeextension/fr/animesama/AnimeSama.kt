@@ -1,6 +1,8 @@
 package eu.kanade.tachiyomi.animeextension.fr.animesama
 
-import androidx.preference.EditTextPreference
+import android.content.SharedPreferences
+import android.webkit.URLUtil
+import android.widget.Toast
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import app.cash.quickjs.QuickJs
@@ -19,10 +21,14 @@ import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parallelCatchingFlatMap
 import eu.kanade.tachiyomi.util.parallelFlatMapBlocking
+import keiyoushi.utils.LazyMutable
+import keiyoushi.utils.addEditTextPreference
+import keiyoushi.utils.delegate
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.injectLazy
@@ -33,17 +39,50 @@ class AnimeSama :
 
     override val name = "Anime-Sama"
 
-    // Domain info at: https://anime-sama.pw
-    override val baseUrl: String
-        get() = preferences.getString(PREF_URL_KEY, PREF_URL_DEFAULT)!!
-
     override val lang = "fr"
 
     override val supportsLatest = true
 
-    private val json: Json by injectLazy()
-
     private val preferences by getPreferencesLazy()
+
+    private var SharedPreferences.customDomain by preferences.delegate(PREF_URL_KEY, PREF_URL_DEFAULT)
+
+    override var baseUrl by LazyMutable { preferences.customDomain.ifBlank { PREF_URL_DEFAULT }.sanitizeDomain() }
+
+    override val client: OkHttpClient = super.client.newBuilder()
+        .followRedirects(false)
+        .addInterceptor { chain ->
+            val maxRedirects = 5
+            var request = chain.request()
+            var response = chain.proceed(request)
+            var redirectCount = 0
+
+            while (response.isRedirect && redirectCount < maxRedirects) {
+                val newUrl = response.header("Location") ?: break
+                val newUrlHttp = request.url.resolve(newUrl) ?: break
+                val redirectedDomain = newUrlHttp.run { "$scheme://$host" }
+                if (redirectedDomain != baseUrl) {
+                    updateDomain(redirectedDomain)
+                }
+                response.close()
+                request = request.newBuilder()
+                    .url(newUrlHttp)
+                    .apply {
+                        header("Origin", redirectedDomain)
+                        header("Referer", "$redirectedDomain/")
+                    }
+                    .build()
+                response = chain.proceed(request)
+                redirectCount++
+            }
+            if (redirectCount >= maxRedirects) {
+                response.close()
+                throw java.io.IOException("Too many redirects: $maxRedirects")
+            }
+            response
+        }.build()
+
+    private val json: Json by injectLazy()
 
     // ============================== Popular ===============================
     override fun popularAnimeParse(response: Response): AnimesPage {
@@ -235,23 +274,33 @@ class AnimeSama :
         return List(urls[0].size) { i -> urls.mapNotNull { it.getOrNull(i) }.distinct() }
     }
 
+    private fun String.sanitizeDomain() = trim().removeSuffix("/").ifBlank { PREF_URL_DEFAULT }
+
+    private fun updateDomain(domain: String) {
+        val newDomain = domain.sanitizeDomain()
+        if (URLUtil.isValidUrl(newDomain)) {
+            preferences.customDomain = newDomain
+            baseUrl = newDomain
+        }
+    }
+
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        EditTextPreference(screen.context).apply {
-            key = PREF_URL_KEY
-            title = PREF_URL_TITLE
-            summary = PREF_URL_SUMMARY
-            setDefaultValue(PREF_URL_DEFAULT)
-            dialogTitle = PREF_URL_TITLE
-            setOnPreferenceChangeListener { _, newValue ->
-                try {
-                    val res = preferences.edit().putString(PREF_URL_KEY, newValue as String).commit()
-                    res
-                } catch (e: Exception) {
-                    e.printStackTrace()
+        screen.addEditTextPreference(
+            key = PREF_URL_KEY,
+            title = PREF_URL_TITLE,
+            default = PREF_URL_DEFAULT,
+            summary = PREF_URL_SUMMARY,
+            onChange = { _, newValue ->
+                val newDomain = newValue.trim().removeSuffix("/")
+                if (URLUtil.isValidUrl(newDomain)) {
+                    updateDomain(newDomain)
+                    true
+                } else {
+                    Toast.makeText(screen.context, "URL invalide. Exemple: $PREF_URL_DEFAULT", Toast.LENGTH_LONG).show()
                     false
                 }
-            }
-        }.also(screen::addPreference)
+            },
+        )
 
         ListPreference(screen.context).apply {
             key = PREF_QUALITY_KEY
@@ -286,6 +335,8 @@ class AnimeSama :
 
         private const val PREF_URL_KEY = "base_url_pref"
         private const val PREF_URL_TITLE = "URL de base"
+
+        // Domain info at: https://anime-sama.pw
         private const val PREF_URL_DEFAULT = "https://anime-sama.tv"
         private const val PREF_URL_SUMMARY = "Pour changer le domaine de l'extension. Voir https://anime-sama.pw"
 
