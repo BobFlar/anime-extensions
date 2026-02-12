@@ -49,12 +49,12 @@ class VidMolyExtractor(private val client: OkHttpClient, private val headers: He
                     return listOf(Video(playlistUrl, "${prefix}VidMoly - Default", playlistUrl, headers = headers))
                 }
 
-                content.split("#EXT-X-STREAM-INF").drop(1).map { variant ->
+                content.split("#EXT-X-STREAM-INF").drop(1).mapNotNull { variant ->
                     val quality = hlsResolutionRegex.find(variant)?.groupValues?.get(1)?.let { "${it}p" } ?: "Unknown"
-                    val videoUrl = variant.substringAfter("\n").substringBefore("\n").trim().let {
-                        if (it.startsWith("http")) it else playlistUrl.substringBeforeLast("/") + "/" + it
+                    variant.lines().drop(1).firstOrNull(String::isNotBlank)?.trim()?.let { url ->
+                        val videoUrl = if (url.startsWith("http")) url else playlistUrl.substringBeforeLast("/") + "/" + url
+                        Video(videoUrl, "${prefix}VidMoly - $quality", videoUrl, headers = headers)
                     }
-                    Video(videoUrl, "${prefix}VidMoly - $quality", videoUrl, headers = headers)
                 }
             }
         }.getOrDefault(emptyList())
