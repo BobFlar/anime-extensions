@@ -227,11 +227,11 @@ class AnimeSama :
         val uncommented = commentRegex.replace(scripts, "")
         val animes = seasonRegex.findAll(uncommented).flatMapIndexed { animeIndex, seasonMatch ->
             val (seasonName, seasonStem) = seasonMatch.destructured
-            
+
             if (Season.isNotEmpty() && seasonStem.replace("/vostfr", "") != Season) {
                 return@flatMapIndexed emptyList()
             }
-            
+
             if (seasonStem.contains("film", true)) {
                 val moviesUrl = "$animeUrl/$seasonStem"
                 val movies = fetchPlayers(moviesUrl).ifEmpty { return@flatMapIndexed emptyList() }
